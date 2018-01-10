@@ -1,3 +1,51 @@
+---
+title: "Analysing Titanic Data set"
+author: "Ayush Bhargava"
+date: "January 9, 2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = F)
+knitr::opts_chunk$set(message = F)
+```
+
+##Table of content
+
+* Introduction
+* Data Source
+* Data Import
+* Missing value Analysis
+* Missing value imputation
+* Feature Engineering
+* Exploratory Analysis
+* Data Preperation for prediction
+* Prediction Models
+
+
+## Introduction
+
+This is my attempt at analysing Titanic data set, which is a very famous data set at [KAGGLE](https://www.kaggle.com/c/titanic). In this analysis i will first explore the dataset, try to understand dependent and independent variable. Then i will deal with missing values in the data set and perform feature engineering to extract as much information from given features as possible.Thereafter i will present visualizations of each features to gather some insights about their distribution and finally build predictive model and evaluate their performance.
+
+## Data Source 
+Train and test data can be dowloaded from here:-
+<https://www.kaggle.com/c/titanic/data>
+Both train and test data sets are in standard csv format and has following features 
+
+```{r pressure, echo=FALSE, cache=TRUE}
+Variable <- c("Survived", "pclass","sex","Age","sibps","parch","ticket","fare","cabin","embarked")
+Definition <- c("Surival","Passenger class","sex","age in years","# of siblings / spouses aboard the Titanic","# of parents / children aboard the Titanic","ticket number","passenger fare","cabin number", "Port of embarkation")
+Key <- c("0 = No, 1 = Yes"," 1 = 1st, 2 = 2nd, 3 = 3rd"," "," "," "," "," "," "," ","C = Cherbourg, Q = Queenstown, S = Southampton")
+library(knitr)
+kable(cbind(Variable,Definition,Key), caption = "Features in data set")
+```
+
+##Data import 
+### Loading Required Libraries
+```{r}
 # data wrangling
 library(tidyverse)
 library(forcats)
@@ -28,62 +76,153 @@ library('rpart')
 library('rpart.plot')
 library('car')
 library('e1071')
+```
 
+###Setting up working directory and getting data 
+```{r,cache=TRUE}
 setwd("C:/Users/ichbi/Desktop/kaggle/Titanic")
 train <- read_csv('train.csv')
-str(train)
+test <- read_csv('test.csv')
+
+```
+Here we are using read_csv as it is faster than read.csv and doesnot convert string as factor by default.
+Next we will sneak peak the train data set and do some preprocessing.
+we will convert some variables in to factor variable for ease of analysis
+
+###Train data preprocessing 
+```{r, cache=TRUE}
+#sneak peak
+glimpse(train)
+
+#converting in to factors 
 train <- train %>% setNames(tolower(names(.))) %>% mutate(survived=factor(survived, levels = c("0","1"), labels = c("0","1")),pclass=factor(pclass), sex=factor(sex),embarked=factor(embarked), set='train')
+
+#looking at the summary 
 summary(train)
+
 #percentage survived 
 surv_pct <- train %>% count(survived) %>% mutate(pct=n/sum(n)) %>% setNames(c('survived','count','percentage')) %>% as.data.frame() %>% mutate(survived=ifelse(survived==0,'No','Yes'))
+```
 
-test <- read_csv('test.csv')
-str(test)
+There is no survived column in the test set and our goal is to build a predictive model on train set and predict survival of passengers in the test set.
+
+###Test data preprocessing 
+```{r, cache=TRUE}
+#sneak peak
+glimpse(test)
+
+#converting in to factors 
 test <- test %>% setNames(tolower(names(.))) %>% mutate(pclass=factor(pclass), sex=factor(sex),embarked=factor(embarked), set='test')
+
+#looking at the summary 
 summary(test)
+
+```
+
+* For doing feature engineering and preprocessing for modeling and there after predicting, we will comine train and test set so that features are consistent amoung two data sets 
+* Just before building models we will again divide the train and test set 
+
+###Merging test and train data sets
+```{r, cache=TRUE}
+#bind_row will row bind and will fill NA values in survived column for test set passengers
 full <- bind_rows(train,test)
 summary(full)
-str(full)
+glimpse(full)
+```
 
-#Missing value analysis
+##Missing Value analysis
+Next we will look if there are any missing values in our data set.
+first we will build a table with count and percentage of missing values for every feature in our data set and later we will visualize the same data
+
+```{r}
+#Creating table of count of missing values in features of our full dataset
 miss_values <- full %>% summarise_all(funs(count=sum(is.na(.)),percentage=sum(is.na(.))/n()))
-miss_count <- miss_values[,1:12] %>% gather(variable, miss_count) 
-miss_count %>% ggplot(aes(x=reorder(variable,-miss_count),y=miss_count)) + geom_bar(stat='identity',fill='red') + geom_text(aes(y=miss_count+30,label=miss_count))+coord_flip()
-miss_percentage <- miss_values[,13:24] %>% gather(variable, miss_percentage)
-miss_percentage %>% ggplot(aes(x=reorder(variable,-miss_percentage),y=miss_percentage)) + geom_bar(stat='identity',fill='red') +coord_flip()
+miss_count <- miss_values[,1:12] %>% gather(variable, miss_count)
+miss_count
 
-#missing value imputation 
-#embarkment : ovbious related variable is fare and pclass 
-str(full %>% filter(is.na(embarked)))
+#visualizing
+miss_count %>% ggplot(aes(x=reorder(variable,-miss_count),y=miss_count)) + geom_bar(stat='identity',fill='red') + geom_text(aes(y=miss_count+30,label=miss_count))+coord_flip()
+
+#Creating table of percentage of missing values in features of our full dataset
+miss_percentage <- miss_values[,13:24] %>% gather(variable, miss_percentage)
+miss_percentage
+
+#Visualizing
+miss_percentage %>% ggplot(aes(x=reorder(variable,-miss_percentage),y=miss_percentage)) + geom_bar(stat='identity',fill='red') +coord_flip()
+```
+
+* Missing value in "cabin" is greater than 80%, we can not do much about this feature
+* We will impute values for other missing variables in the next section
+
+##Missing value Imputation
+###Embarkement :-
+This variable could be related to fare and pclass variable, lets look at the whole feature space of these missing points
+```{r}
+glimpse(full %>% filter(is.na(embarked)))
+```
+
+Now we know that these are 1st class females who paid 80 fare. lets look at relationship between pclass vs fare vs embarkemnt and see if we could decipher any useful information about emabarkment of these passengers
+
+```{r}
+#subseting the non missing embarked
 embark_full <- full %>% filter(!is.na(embarked))
-#1st class, females, 80 fair
+
+#plotting
 ggplot(embark_full, aes(x=embarked,y=fare, fill=pclass))+geom_boxplot()+geom_hline(yintercept = 80)
+```
+
+It is clearly visible in the plot that passenger of 1st class embarked from "C" paid a fare of 80 on average, thus it is safe to impute "c" for these missing embarked passengers
+
+#### Imputing value and getting the imputed data set 
+```{r}
 full <- full %>% mutate(embarked=factor(ifelse(is.na(full$embarked),'C', as.character(embarked))))
-                        
- #fare
-str(full %>% filter(is.na(fare)))
-#embarked = s, pclass=3, since only one value is missing lets plug with the median in this category
+```
+
+###Fare :-
+lets look at the whole feature space of the missing point
+```{r}
+glimpse(full %>% filter(is.na(fare)))
+```
+
+embarked = s, pclass=3, since only one value is missing lets plug with the median in this category
+
+####Imputing value and getting the imputed data set 
+```{r}
 impte_value <- full %>% group_by(embarked, pclass) %>% summarise(mean_fare=median(fare,na.rm=T)) %>% filter(embarked=='S',pclass==3) %>% .$mean_fare
 full <- full %>% mutate(fare=ifelse(is.na(full$fare),impte_value,fare))
-                        
-#age
-#using mice imputation
- #creating dataset for mice imputation 
+```
+
+###Age :-
+We saw earlier there are many missing points in age feature, thus we will use mice imputation, which is a neat implementation of data imputation. more can be read about mice imputation [here](http://www.jstatsoft.org/article/view/v045i03/v45i03.pdf)
+```{r}
+#creating dataset for mice imputation 
   mice_data <- full[,!names(full) %in% c('passengerid','name','ticket','cabin','survived')]
  set.seed(120)
  imputed_data <- mice(mice_data, method = 'rf')
 imputed_data <- mice::complete(imputed_data)
-                        
+```
+
+lets compare age distribution in original and imputed data set
+```{r}
 #comparing age distribution in original and imputed data 
  par_1 <- ggplot(full, aes(x=age)) + geom_histogram(fill='skyblue', binwidth = 2) + labs(title="Original data")
  par_2 <- ggplot(imputed_data, aes(x=age)) + geom_histogram(fill='darkgreen', binwidth = 2) + labs(title="imputed data")
 grid.arrange(par_1, par_2, ncol=2)
-                        
+```
+
+Age distribution in imputed dataset seems is in line with the original dataset, lets replace age in original data set with imputed value
+
+```{r}
 #finally replacing age variable in full data set 
 full$age <- imputed_data$age
+```
 
-#Feature engineering
-#Creating title
+##Feature Engineering
+There are features in data set which contains more information that could potentailly reduce bais in our prediction models. This information is not implicitly visible and has to be extracted. This process is feature engineering.
+
+###Creating Title 
+From the name variable we can extract title of a passenger to add more information for training our model
+```{r}
 full$title <- gsub("^.*,[[:blank:]](.*?)\\..*$", "\\1", full$name)
 table(full$title)
 rare <- c('the Countess','Capt', 'Col', 'Don', 
@@ -96,110 +235,163 @@ full$title[full$title == 'Dona'] <- 'Miss'
 full$title[full$title %in% rare] <- "rare"
 table(full$title)
 full$title <- factor(full$title)
+```
+We have grabbed the title from the name and categorised them on the basis of occurance in the data set to avoid outliers. we will explore the surivival on the basis of title in the next section 
 
-#family size 
+###Family size 
+We will explore Whether size of family matter in the survival. we will create a family size variable by adding no of siblings (sibps) and no of parents variable(parch)
+
+```{r}
 full$familysize <- full$sibsp +full$parch +1
 full$FamilySized[full$familysize == 1] <- 'Single' 
 full$FamilySized[full$familysize < 5 & full$familysize >= 2] <- 'Small' 
 full$FamilySized[full$familysize >= 5] <- 'Big' 
 full$FamilySized=as.factor(full$FamilySized)
+```
+To avoid outliers we have created categories of family size 
 
-#age group
+###Age groups
+To analyse age variable lets categorise this variable too 
+```{r}
 full <- full %>% mutate(agegroup=case_when(age<13 ~"children", (age >= 13 & age< 18) ~ "adolsents", (age >=18 & age<60) ~ "adults", age>=60 ~ "aged")) %>% mutate(agegroup=factor(agegroup))
 
+```
+
+###Ticket groups
+Ticket variable does not seem to provide useful information, to use this variable we will do some text mining and find pattern in the ticket number and finally creating groups based on pattern.
+
+It was found that there are ticket numbers which are numeric with 3,4,5,6,7 digits and than there are ticket numbers which starts with certain letters, we have created a variable ticket group based on these observed pattern.
+```{r}
 #Ticket
 full <- full %>% mutate(ticketgroup= tolower(ticket)) %>% mutate(ticketgroup=removePunctuation(ticketgroup)) %>% mutate(ticketgroup=gsub(" ","", ticketgroup)) %>% mutate(ticketgroup= case_when(grepl('^[0-9]', ticketgroup) & nchar(ticketgroup)==3 ~ "numeric3", grepl('^[0-9]', ticketgroup) & nchar(ticketgroup)==4 ~ "numeric4",grepl('^[0-9]', ticketgroup) & nchar(ticketgroup)==5 ~ "numeric5",grepl('^[0-9]', ticketgroup) & nchar(ticketgroup)==6 ~ "numeric6",grepl('^[0-9]', ticketgroup) & nchar(ticketgroup)==7 ~ "numeric7", grepl("^(a)", ticketgroup) ~ "a",grepl("^(c)", ticketgroup) ~ "c",grepl("^(f)", ticketgroup)|grepl("^(l)", ticketgroup) ~ "f",grepl("^(p)", ticketgroup)~ "p",grepl("^(s)", ticketgroup)~"s",grepl("^(w)", ticketgroup)~"w" ))%>% mutate(ticketgroup=factor(ticketgroup))
+```
 
+###Exploratory Analysis
+###survival vs other relevant variables {.tabset .tabset-fade}
 
-#exploratory analysis
-#survival vs other relevant variables
-#pclass
+####Pclass
+```{r}
 summary <- full %>% filter(set=='train') %>% group_by(pclass) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
-ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=pclass, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='Passenger class', y= "survival rate", title ="survival rate vs Passenger class")      #use RColorBrewer::display.brewer.all() to check pallet options
+ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=pclass, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='Passenger class', y= "survival rate", title ="Survival rate vs Passenger class")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=pclass, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='Passenger class', y= "Number of passenger", title ="Number of passenger vs Passenger class")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#sex
+####Sex
+```{r}
 summary <- full %>% filter(set=='train') %>% group_by(sex) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=sex, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='sex', y= "survival rate", title ="survival rate vs sex")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=sex, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='sex', y= "Number of passenger", title ="Number of passenger vs sex")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#age 
+####Age 
+```{r}
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'),aes(x=age, fill=survived))+geom_histogram(aes(y=..density..), alpha=0.5)+geom_density(alpha=0.2,aes(colour=survived))+scale_y_continuous(label=percent)+labs(x="age",y='density', title="age distribution")
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'),aes(x=age, fill=survived))+geom_histogram(alpha=0.5)+labs(x="age",y='passengers', title="age distribution")
+```
 
-#agegroup
+####Agegroup
+```{r}
 summary <- full %>% filter(set=='train') %>% group_by(agegroup) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=agegroup, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='age group', y= "survival rate", title ="survival rate vs age group")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=agegroup, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='age group', y= "Number of passenger", title ="Number of passenger vs age group")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-
-#sibsp
+####Sibsp
+```{r}
 summary <- full %>% filter(set=='train') %>% group_by(sibsp) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=sibsp, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='number of siblings', y= "survival rate", title ="survival rate vs number of siblings")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=sibsp, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='number of siblings', y= "Number of passenger", title ="Number of passenger vs number of siblings")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#parch
+####Parch
+```{r, cache=TRUE}
 summary <- full %>% filter(set=='train') %>% group_by(parch) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=parch, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='number of parents', y= "survival rate", title ="survival rate vs number of parents")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=parch, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='number of parents', y= "Number of passenger", title ="Number of passenger vs number of parents")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#fare
+####Fare
+```{r, cache=TRUE}
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'),aes(x=fare, fill=survived))+geom_histogram(aes(y=..density..), alpha=0.5)+geom_density(alpha=0.2,aes(colour=survived))+scale_y_continuous(label=percent)+labs(x="fare",y='density', title="fare distribution")
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'),aes(x=fare, fill=survived))+geom_histogram(alpha=0.5)+labs(x="fare",y='passengers', title="fare distribution")
+```
 
-#embarked
+####Embarked
+```{r, cache=TRUE}
 summary <- full %>% filter(set=='train') %>% group_by(embarked) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=embarked, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='embarkment', y= "survival rate", title ="survival rate vs embarkment")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=embarked, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='embarkment', y= "Number of passenger", title ="Number of passenger vs embarkment")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#title
+####Title
+```{r, cache=TRUE}
 summary <- full %>% filter(set=='train') %>% group_by(title) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=title, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='title', y= "survival rate", title ="survival rate vs title")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=title, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='title', y= "Number of passenger", title ="Number of passenger vs title")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#family size
+
+####Family size
+```{r, cache=TRUE}
 summary <- full %>% filter(set=='train') %>% group_by(FamilySized) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=FamilySized, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='family size', y= "survival rate", title ="survival rate vs family size")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=FamilySized, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='family size', y= "Number of passenger", title ="Number of passenger vs family size")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-#Ticket Group
+####Ticket Group
+```{r, cache=TRUE}
 summary <- full %>% filter(set=='train') %>% group_by(ticketgroup) %>% summarise(passenger=n(),survived=sum(as.numeric(as.character(survived))), survival_rate= round(sum(as.numeric(as.character(survived)))*100/n()))
 kable(summary)
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=ticketgroup, fill=survived))+geom_bar(position = "fill")+scale_fill_brewer(palette="Set1")+ scale_y_continuous(labels = percent)+labs(x='ticket group', y= "survival rate", title ="survival rate vs ticket group")      #use RColorBrewer::display.brewer.all() to check pallet options
 ggplot(full %>% mutate(survived=case_when(survived==0 ~ "No", survived==1 ~'yes'))  %>% filter(set=='train'), aes(x=ticketgroup, fill=survived))+geom_bar()+scale_fill_brewer(palette="Set1")+labs(x='ticket group', y= "Number of passenger", title ="Number of passenger vs ticket group")      #use RColorBrewer::display.brewer.all() to check pallet options
+```
 
-
+##Feature Correlation
+```{r, cache=TRUE}
 #feature correlation
 coor_tbl <- full %>% filter(set=="train")%>%select(-passengerid,-name,-ticket,-cabin,-set) %>% mutate_all(as.numeric)%>%cor(use="complete.obs")%>%corrplot(type="lower", diag=FALSE)
+```
 
+##Data Preperation for prediction
+```{r, cache=TRUE}
 #prep for prediction 
 set.seed(120)
+
 train_dev <- full %>% filter(set=="train") %>% select(survived,pclass,sex,agegroup,ticketgroup,FamilySized,title,fare, embarked)
 data_partition <- createDataPartition(train_dev$survived, p=0.8, list=F)
+
+#Train
 train_final <- train_dev[data_partition,]
+
+#Development
 dev_final <- train_dev[-data_partition,]
 
 #test set for final prediction
 test_final <- full %>% filter(set=="test") %>% select(survived,pclass,sex,agegroup,ticketgroup,FamilySized,title,fare, embarked)
 
+```
 
-#decision tree
+##Prediction Models{.tabset .tabset-fade}
+###Classification Tree
+```{r, cache=TRUE}
 model_dt <- rpart(survived~., data=train_final,method='class')
 rpart.plot(model_dt,extra =  3)
 predict_train <- predict(model_dt,data=train_final,type = "class")
 confusionMatrix(predict_train,train_final$survived)
 predict_dev <- predict(model_dt, newdata = dev_final, type = "class")
 confusionMatrix(predict_dev,dev_final$survived)
+```
 
-#crossvalidated decision tree
+###Cross validated decision tree
+```{r, cache=TRUE}
 set.seed(120)
 cv.10 <- createMultiFolds(train_final$survived,k=10,times=10)
 ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 10, index=cv.10)
@@ -211,9 +403,10 @@ predict2_train <- predict(model_cdt$finalModel, data=train_final, type="class")
 confusionMatrix(predict2_train,train_final$survived)
 predict2_dev <- predict(model_cdt$finalModel, newdata=dev_final, type="class")
 confusionMatrix(predict2_dev,dev_final$survived)
+```
 
-
-#Logistic regression
+###Logistic Regression
+```{r, cache=TRUE}
 model_logit <- glm(survived~.,data = train_final, family = binomial)
 predict_logit_train <- predict(model_logit, data=train_final, type='response')
 table(train_final$survived, predict_logit_train>0.5)
@@ -223,9 +416,10 @@ predict_logit_dev <- predict(model_logit, newdata=dev_final, type='response')
 table(dev_final$survived, predict_logit_dev>0.5)
 accurcy <- (95+51)/(95+51+17+14)
 accurcy
+```
 
-
-#Random Forest
+###Random Forest
+```{r, cache=TRUE}
 model_rf <- randomForest(x=train_final[,-1],y=train_final[,1], mtry = 3, ntree = 1000, importance=T)
 model_rf
 predict_train_rf <- predict(model_rf,data=train_final,type = "class")
@@ -236,8 +430,10 @@ confusionMatrix(predict_dev_rf,dev_final$survived)
 
 importance(model_rf)
 varImpPlot(model_rf)
+```
 
-#cross validated RF
+###Cross Validated Random Forest 
+```{r, cache=TRUE}
 set.seed(120)
 cv.10 <- createMultiFolds(train_final$survived,k=10,times=10)
 ctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 10, index=cv.10)
@@ -253,10 +449,7 @@ confusionMatrix(predict_dev_crf,dev_final$survived)
 
 var_imp <- varImp(model_crf, scale=F)
 var_imp
-Plot(var_imp)
-
-
-#final prediction on test 
-prediction_test <- predict(model_cdt, newdata = test_final)
+plot(var_imp)
+```
 
 
